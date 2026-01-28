@@ -14,6 +14,7 @@ Instantly see the status of your dependencies right next to your code.
 - **🟡 Minor Update**: A new feature release is available.
 - **🔴 Major Update**: A breaking change release is available.
 - **⚠ Validation**: Detects typos and warns if a dependency version doesn't exist on PyPI.
+<img width="634" height="795" alt="image" src="https://github.com/user-attachments/assets/92a7ec20-13f5-4e95-944b-064f0be61fa7" />
 
 ### 🧠 Smart Update Suggestions
 We don't just tell you there's an update; we help you choose the *right* one.
