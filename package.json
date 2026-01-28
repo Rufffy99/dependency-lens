@@ -3,7 +3,7 @@
   "displayName": "Dependency Lens for pyproject.toml",
   "description": "Manage Python dependencies in pyproject.toml with inline updates and hover details.",
   "version": "0.1.0",
-  "publisher": "pyproject-manager",
+  "publisher": "MaxDomitrovic",
   "repository": {
     "type": "git",
     "url": "https://github.com/Rufffy99/dependency-lens"
