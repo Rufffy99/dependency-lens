@@ -8,6 +8,7 @@
     "type": "git",
     "url": "https://github.com/Rufffy99/dependency-lens"
   },
+  "icon": "assets/logo.png",
   "engines": {
     "vscode": "^1.85.0"
   },
