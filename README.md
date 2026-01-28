@@ -47,5 +47,21 @@ We are building the **One Manager to Rule Them All**. While we started with Pyth
 
 ---
 
+---
+
+## 📜 Changelog
+
+### 0.1.1
+- Added branding: official extension icon and screenshot in README.
+
+### 0.1.0
+- 🚀 Initial release of **Dependency Lens**.
+- 🔍 PEP 621 and Poetry support.
+- 🧠 Smart version updates and inline decorations.
+- 👆 Rich hover details with PyPI integration.
+
+---
+
 **Enjoying the extension?**  
 Please leave a review and star us on GitHub! ⭐
+
