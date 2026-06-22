@@ -1,5 +1,5 @@
 import * as assert from 'assert';
-import { compareVersions } from '../core/versions';
+import { compareVersions, extractComparableVersion } from '../core/versions';
 
 describe('Version Comparison', () => {
     it('should detect major updates', () => {
@@ -47,5 +47,24 @@ describe('Version Comparison', () => {
         // If I pass clean stable:
         const s2 = compareVersions('1.0.0', '1.1.0');
         assert.strictEqual(s2.type, 'minor');
+    });
+
+    it('should extract version from comparator specs only', () => {
+        assert.strictEqual(extractComparableVersion('==5.2.2'), '5.2.2');
+        assert.strictEqual(extractComparableVersion('>=2025.3'), '2025.3.0');
+    });
+
+    it('should extract versions for caret and tilde specs', () => {
+        assert.strictEqual(extractComparableVersion('^1.2.3'), '1.2.3');
+        assert.strictEqual(extractComparableVersion('~1.2.3'), '1.2.3');
+    });
+
+    it('should ignore environment markers when extracting version', () => {
+        assert.strictEqual(extractComparableVersion('>=1.2.3; python_version >= "3.12"'), '1.2.3');
+        assert.strictEqual(extractComparableVersion('foo; python_version >= "3.12"'), null);
+    });
+
+    it('should not extract version from extras-only fragments', () => {
+        assert.strictEqual(extractComparableVersion('[s3]'), null);
     });
 });

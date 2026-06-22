@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { parsePyProject } from '../core/parser';
 import { fetchPackageMetadata } from '../core/pypi';
-import { compareVersions, getLatestInMajor, isValidVersion } from '../core/versions';
+import { compareVersions, extractComparableVersion, getLatestInMajor, isValidVersion } from '../core/versions';
 import * as semver from 'semver';
 
 let decorationType: vscode.TextEditorDecorationType;
@@ -89,10 +89,20 @@ export function activateDecorations(context: vscode.ExtensionContext) {
                     const latestInMajor = getLatestInMajor(metadata.allVersions, dep.version);
 
                     if (latestInMajor) {
-                        const cleanCurrent = semver.coerce(dep.version)?.version || dep.version;
-                        const diffType = semver.diff(cleanCurrent, latestInMajor);
-                        const label = diffType === 'patch' || diffType === 'prepatch' ? 'Latest Patch' : 'Latest Minor';
-                        contentText = ` \u2192 ${status.latest} (${label}: ${latestInMajor})`;
+                        const cleanCurrent = extractComparableVersion(dep.version);
+                        const diffType = cleanCurrent ? semver.diff(cleanCurrent, latestInMajor) : null;
+
+                        let label = 'Latest in major';
+                        if (diffType === 'patch' || diffType === 'prepatch') {
+                            label = 'Latest Patch';
+                        } else if (diffType === 'minor' || diffType === 'preminor') {
+                            label = 'Latest Minor';
+                        }
+
+                        // Display original PyPI version strings
+                        const displayLatest = metadata.originalVersions[status.latest] || status.latest;
+                        const displayLatestInMajor = metadata.originalVersions[latestInMajor] || latestInMajor;
+                        contentText = ` \u2192 ${displayLatest} (${label}: ${displayLatestInMajor})`;
                     }
                 }
 

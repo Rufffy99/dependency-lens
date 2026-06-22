@@ -16,6 +16,8 @@ export interface PackageMetadata {
     latestPrerelease?: string;
     latestInMajor?: string; // Latest version strictly within the current major version
     allVersions: string[]; // Sorted list of all versions (descending)
+    // Map from normalized version (e.g. "3.0.3+260530") to original PyPI version (e.g. "3.0.3.260530")
+    originalVersions: Record<string, string>;
     homePage?: string;
     documentationUrl?: string;
     changelogUrl?: string;

@@ -90,14 +90,44 @@ export function parsePyProject(text: string): Dependency[] {
 
     const SECTION_REGEX = /^\[(.+)\]$/;
 
-    // Helper to extract name/version from list items like "requests==1.0.0"
-    function parseListItem(fullString: string): { name: string; spec: string } | null {
-        // Naive split: letters/numbers/dot/dash/underscore is name. Rest is spec.
-        const match = fullString.match(/^([a-zA-Z0-9_.-]+)(.*)$/);
-        if (match) {
-            return { name: match[1], spec: match[2] };
+    // Helper to extract name/extras/spec from list items like "requests[socks]==1.0.0".
+    // We keep extras in the line, but parse package name separately for PyPI lookup.
+    function parseListItem(
+        fullString: string,
+    ): { name: string; extras: string; spec: string; specOffset: number } | null {
+        const nameMatch = fullString.match(/^([a-zA-Z0-9][a-zA-Z0-9_.-]*)/);
+        if (!nameMatch) {
+            return null;
         }
-        return null;
+
+        const name = nameMatch[1];
+        let cursor = name.length;
+        let extras = '';
+
+        // Parse extras block, e.g. [standard] / [s3]
+        if (fullString[cursor] === '[') {
+            const extrasEnd = fullString.indexOf(']', cursor);
+            if (extrasEnd !== -1) {
+                extras = fullString.slice(cursor, extrasEnd + 1);
+                cursor = extrasEnd + 1;
+            }
+        }
+
+        const rest = fullString.slice(cursor);
+        // Restrict operator search to the pre-marker portion so environment markers such as
+        // `; python_version >= '3.12'` are never mistaken for version specifiers.
+        const markerSep = rest.indexOf(';');
+        const specCandidate = markerSep === -1 ? rest : rest.slice(0, markerSep);
+        const operatorOffset = specCandidate.search(/(===|==|~=|!=|<=|>=|<|>|\^|~)/);
+
+        if (operatorOffset === -1) {
+            return { name, extras, spec: '', specOffset: fullString.length };
+        }
+
+        const specStart = cursor + operatorOffset;
+        const spec = specCandidate.slice(operatorOffset).trim();
+
+        return { name, extras, spec, specOffset: specStart };
     }
 
     for (let i = 0; i < lines.length; i++) {
@@ -129,20 +159,19 @@ export function parsePyProject(text: string): Dependency[] {
                     if (parsedItem) {
                         const contentIdx = lines[i].indexOf(t.name);
                         if (contentIdx !== -1) {
-                            // "requests==1.0.0" -> name="requests", spec="==1.0.0"
-                            // contentIdx points to start of "requests".
-                            // We want startCol to point to "==1.0.0".
-                            // Offset = name.length
-                            const specStartCol = contentIdx + parsedItem.name.length;
+                            const specStartCol = contentIdx + parsedItem.specOffset;
+                            const specEndCol = parsedItem.spec
+                                ? specStartCol + parsedItem.spec.length
+                                : contentIdx + t.name.length;
 
                             dependencies.push({
                                 name: parsedItem.name,
                                 version: parsedItem.spec,
                                 line: i,
                                 startCol: specStartCol,
-                                endCol: contentIdx + t.name.length, // End of the full string
+                                endCol: specEndCol,
                                 nameStartCol: contentIdx, // Start of name
-                                nameEndCol: specStartCol, // End of name
+                                nameEndCol: contentIdx + parsedItem.name.length, // End of base package name
                                 source: 'project',
                             });
                         }

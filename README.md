@@ -30,15 +30,6 @@ Hover over any dependency to get specific details without leaving VS Code:
 ### 🧹 Clean & Non-Destructive
 Updates are applied intelligently, preserving your existing formatting and quotes.
 
-## 🔮 Roadmap: The Future of Dependency Management
-
-We are building the **One Manager to Rule Them All**. While we started with Python, our vision is to provide this seamless experience for *every* language.
-
-**Coming Soon:**
-- **📦 Node.js Support**: Full support for `package.json` dependencies.
-- **🦀 Rust Support**: Manage crates in `Cargo.toml`.
-- **🐹 Go Support**: Handle modules in `go.mod`.
-
 ## ⌨ Usage
 
 1. Open any `pyproject.toml` file.
@@ -47,18 +38,36 @@ We are building the **One Manager to Rule Them All**. While we started with Pyth
 
 ---
 
+## 💬 Feedback & Feature Requests
+
+Found a bug or have an idea for a new feature?
+
+Please open an issue on GitHub:
+- https://github.com/Rufffy99/dependency-lens/issues
+
 ---
 
 ## 📜 Changelog
+
+### 0.1.2
+**Major improvements to version handling and display:**
+
+- Fixed dependency parsing for extras in requirement strings (e.g. `fastapi[standard]==...`, `moto[s3]==...`).
+- Fixed update replacement ranges to preserve extras and comparators correctly in one-click updates.
+- Improved version extraction to read versions from comparators instead of extras fragments.
+- **Added support for PEP 440 post-releases and dev-releases** (e.g. `1.0.0.post1`, `1.0.0.dev1`).
+- **Added support for 4+ segment versions** used by projects like pandas-stubs (e.g. `3.0.3.260530` displays and updates correctly).
+- **Improved version comparisons to consider build metadata** so updates are shown for 4-segment releases that differ only in the build part.
+- **Preserved original PyPI version formats** in hover details and update buttons (e.g. `3.0.3.260530` instead of internal `3.0.3+260530`).
+- Improved PyPI release filtering to avoid suggesting unstable/yanked artifacts as stable updates.
 
 ### 0.1.1
 - Added branding: official extension icon and screenshot in README.
 
 ### 0.1.0
-- 🚀 Initial release of **Dependency Lens**.
-- 🔍 PEP 621 and Poetry support.
-- 🧠 Smart version updates and inline decorations.
-- 👆 Rich hover details with PyPI integration.
+- PEP 621 and Poetry support.
+- Smart version updates and inline decorations.
+- Rich hover details with PyPI integration.
 
 ---
 

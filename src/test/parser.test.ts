@@ -113,4 +113,58 @@ docs = [
         assert.ok(mkdocs, 'mkdocs not found');
         assert.strictEqual(mkdocs?.version, '==1.5.3');
     });
+
+    it('should parse extras without corrupting version range columns', () => {
+        const content = `
+[project]
+dependencies = [
+    "fastapi[standard]==0.137.1"
+]
+`;
+
+        const deps = parsePyProject(content);
+        assert.strictEqual(deps.length, 1);
+
+        const fastapi = deps[0];
+        assert.strictEqual(fastapi.name, 'fastapi');
+        assert.strictEqual(fastapi.version, '==0.137.1');
+
+        const lineText = content.split('\n')[3];
+        assert.strictEqual(lineText.slice(fastapi.startCol, fastapi.endCol), '==0.137.1');
+    });
+
+    it('should parse optional dependency extras using version after comparator', () => {
+        const content = `
+[project.optional-dependencies]
+test = [
+    "moto[s3]==5.2.2"
+]
+`;
+
+        const deps = parsePyProject(content);
+        assert.strictEqual(deps.length, 1);
+
+        const moto = deps[0];
+        assert.strictEqual(moto.name, 'moto');
+        assert.strictEqual(moto.version, '==5.2.2');
+    });
+
+    it('should parse caret and tilde specs after extras', () => {
+        const content = `
+[project]
+dependencies = [
+    "pkg[extra]^1.2.3",
+    "pkg2[extra]~2.3.4"
+]
+`;
+
+        const deps = parsePyProject(content);
+        assert.strictEqual(deps.length, 2);
+
+        const pkg = deps.find((d) => d.name === 'pkg');
+        assert.strictEqual(pkg?.version, '^1.2.3');
+
+        const pkg2 = deps.find((d) => d.name === 'pkg2');
+        assert.strictEqual(pkg2?.version, '~2.3.4');
+    });
 });

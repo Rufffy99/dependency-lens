@@ -1,5 +1,48 @@
 import * as semver from 'semver';
 import { VersionStatus } from './types';
+import { normalizePyPIVersion } from './pypi';
+
+export function extractComparableVersion(spec: string): string | null {
+    const trimmed = spec.trim();
+    if (!trimmed) {
+        return null;
+    }
+
+    // Ignore environment markers; only parse the requirement specifier portion.
+    const specifier = trimmed.split(';')[0].trim();
+    if (!specifier) {
+        return null;
+    }
+
+    // Prefer a version after an explicit comparator (==, >=, ~, ^, etc).
+    // Accept 4+ segment versions (e.g. 3.0.3.260530) for PEP 440 post-releases and custom versioning.
+    const comparatorMatch = specifier.match(
+        /^\s*(?:===|==|~=|!=|<=|>=|<|>|\^|~)\s*v?(\d+(?:\.\d+)*(?:-[0-9A-Za-z.-]+)?)/,
+    );
+    if (comparatorMatch?.[1]) {
+        // Normalize the extracted version (e.g. 3.0.3.260530 -> 3.0.3+260530).
+        const extracted = comparatorMatch[1];
+        const normalized = normalizePyPIVersion(extracted);
+        if (normalized) {
+            return normalized;
+        }
+        // Fallback to semver coercion if normalization fails.
+        return semver.valid(extracted) || semver.coerce(extracted)?.version || null;
+    }
+
+    // Fallback for plain versions like "1.2.3" or "3.0.3.260530".
+    const directVersionMatch = specifier.match(/^v?(\d+(?:\.\d+)*(?:-[0-9A-Za-z.-]+)?)$/);
+    if (directVersionMatch?.[1]) {
+        const extracted = directVersionMatch[1];
+        const normalized = normalizePyPIVersion(extracted);
+        if (normalized) {
+            return normalized;
+        }
+        return semver.valid(extracted) || semver.coerce(extracted)?.version || null;
+    }
+
+    return null;
+}
 
 export function compareVersions(currentSpec: string, latestStable: string): VersionStatus {
     // 1. Clean up currentSpec to get a comparable version
@@ -14,7 +57,7 @@ export function compareVersions(currentSpec: string, latestStable: string): Vers
     // BUT the prompt example: "current: 1.4.2, latest: 2.1.0 -> RED".
     // So we treat the *explicitly written version* as the current state.
 
-    const cleanCurrent = semver.coerce(currentSpec)?.version;
+    const cleanCurrent = extractComparableVersion(currentSpec);
 
     if (!cleanCurrent) {
         // If we can't parse a version (e.g. "*", "git..."), we can't really do inline updates easily.
@@ -44,6 +87,13 @@ export function compareVersions(currentSpec: string, latestStable: string): Vers
         return { current, latest, type: 'patch' };
     }
 
+    // Build-metadata-only update (e.g. latestStable "3.0.3+260530" vs current "3.0.3",
+    // or a post-release "1.0.0+post.1" vs "1.0.0"). semver treats these as equal, but
+    // the build part signals a newer release on PyPI.
+    if (isNewerVersion(latest, current)) {
+        return { current, latest, type: 'patch' };
+    }
+
     return { current, latest, type: 'latest' };
 }
 
@@ -62,12 +112,46 @@ export function getGenericUpdateType(current: string, target: string): 'major' |
     return 'patch'; // patch, prepatch, prerelease
 }
 
+// Ascending comparator for build metadata segments (higher numeric value = newer).
+function compareBuildPartsAsc(aBuild: readonly string[], bBuild: readonly string[]): number {
+    const len = Math.max(aBuild.length, bBuild.length);
+    for (let i = 0; i < len; i++) {
+        const aPart = aBuild[i];
+        const bPart = bBuild[i];
+        if (aPart === undefined) return -1;
+        if (bPart === undefined) return 1;
+        const aNum = Number(aPart);
+        const bNum = Number(bPart);
+        if (Number.isFinite(aNum) && Number.isFinite(bNum) && aNum !== bNum) {
+            return aNum - bNum;
+        }
+        if (aPart !== bPart) return aPart.localeCompare(bPart);
+    }
+    return 0;
+}
+
+/**
+ * Returns true if version `a` is strictly newer than `b`, treating build metadata as a
+ * tie-breaker when the semver core (major.minor.patch[-pre]) is identical.
+ * This is necessary because semver.gt ignores build metadata per the semver spec, but
+ * PyPI normalises 4+ segment versions (e.g. 3.0.3.260530) into build metadata, so
+ * comparing `3.0.3+260530` against `3.0.3` with semver.gt would incorrectly return false.
+ */
+export function isNewerVersion(a: string, b: string): boolean {
+    if (semver.gt(a, b)) return true;
+    if (semver.lt(a, b)) return false;
+    // Same semver core: use build metadata as tie-breaker.
+    const aBuild = semver.parse(a)?.build ?? [];
+    const bBuild = semver.parse(b)?.build ?? [];
+    return compareBuildPartsAsc(aBuild, bBuild) > 0;
+}
+
 export function getLatestInMajor(allVersions: string[], currentVersion: string): string | null {
     if (!allVersions || !currentVersion) {
         return null;
     }
 
-    const cleanCurrent = semver.coerce(currentVersion)?.version;
+    const cleanCurrent = extractComparableVersion(currentVersion);
     if (!cleanCurrent) {
         return null;
     }
@@ -76,16 +160,16 @@ export function getLatestInMajor(allVersions: string[], currentVersion: string):
 
     // Find all satisfying versions
     const candidates = allVersions.filter(
-        (v) => semver.major(v) === currentMajor && semver.gt(v, cleanCurrent) && !semver.prerelease(v),
+        (v) => semver.major(v) === currentMajor && isNewerVersion(v, cleanCurrent) && !semver.prerelease(v),
     );
 
     if (candidates.length === 0) {
         return null;
     }
 
-    // Return the largest
-    // Sort descending just to be safe, then take first
-    candidates.sort(semver.rcompare);
+    // Return the largest; use the build-aware comparator so that build-metadata-only
+    // differences (e.g. 3.0.3+260530 vs 3.0.3+260529) are ordered correctly.
+    candidates.sort((a, b) => (isNewerVersion(a, b) ? -1 : isNewerVersion(b, a) ? 1 : 0));
 
     return candidates[0];
 }
@@ -94,7 +178,7 @@ export function isValidVersion(allVersions: string[], currentVersion: string): b
     if (!allVersions || !currentVersion) {
         return true;
     } // Can't validate
-    const cleanCurrent = semver.coerce(currentVersion)?.version;
+    const cleanCurrent = extractComparableVersion(currentVersion);
     if (!cleanCurrent) {
         return true;
     } // logic fallback, maybe valid but unparseable?

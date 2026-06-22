@@ -1,8 +1,7 @@
 import * as vscode from 'vscode';
 import { parsePyProject } from '../core/parser';
 import { fetchPackageMetadata } from '../core/pypi';
-import * as semver from 'semver';
-import { getLatestInMajor } from '../core/versions'; // Imported directly
+import { extractComparableVersion, getLatestInMajor, isNewerVersion } from '../core/versions';
 
 export function activateHover(context: vscode.ExtensionContext) {
     context.subscriptions.push(
@@ -38,7 +37,9 @@ export function activateHover(context: vscode.ExtensionContext) {
                 md.appendMarkdown(`**${metadata.name}** \n\n`);
                 md.appendMarkdown(`${metadata.summary}\n\n`);
                 md.appendMarkdown(`Current: \`${dep.version}\`\n\n`);
-                md.appendMarkdown(`Latest: \`${metadata.latestStable}\`\n\n`);
+                // Display the original PyPI version string instead of the normalized form
+                const displayLatest = metadata.originalVersions[metadata.latestStable] || metadata.latestStable;
+                md.appendMarkdown(`Latest: \`${displayLatest}\`\n\n`);
 
                 if (metadata.homePage) {
                     md.appendMarkdown(`[Homepage](${metadata.homePage})`);
@@ -70,12 +71,18 @@ export function activateHover(context: vscode.ExtensionContext) {
                 };
 
                 const makeCommand = (title: string, version: string) => {
-                    return `[${title}](command:python-dependency-manager.updateDependency?${commandArgs(version)})`;
+                    // Use the original PyPI version string in the command
+                    const originalVersion = metadata.originalVersions[version] || version;
+                    return `[${title}](command:python-dependency-manager.updateDependency?${commandArgs(originalVersion)})`;
                 };
 
+                const currentComparable = extractComparableVersion(dep.version);
+
                 // Buttons
-                if (semver.gt(metadata.latestStable, semver.coerce(dep.version)?.version || '0.0.0')) {
-                    md.appendMarkdown(makeCommand(`Update to ${metadata.latestStable}`, metadata.latestStable));
+                if (currentComparable && isNewerVersion(metadata.latestStable, currentComparable)) {
+                    const displayLatestStable =
+                        metadata.originalVersions[metadata.latestStable] || metadata.latestStable;
+                    md.appendMarkdown(makeCommand(`Update to ${displayLatestStable}`, metadata.latestStable));
                     md.appendMarkdown('&nbsp;&nbsp;'); // Spacing
                 }
 
@@ -87,9 +94,9 @@ export function activateHover(context: vscode.ExtensionContext) {
                     if (latestInMajor && latestInMajor !== metadata.latestStable) {
                         // Check strictly > current logic is inside getLatestInMajor, but helpful to double check?
                         // getLatestInMajor ensures it is gt current.
-                        const cleanCurrent = semver.coerce(dep.version)?.version || '0.0.0';
-                        if (semver.gt(latestInMajor, cleanCurrent)) {
-                            md.appendMarkdown(makeCommand(`Update to ${latestInMajor}`, latestInMajor));
+                        if (currentComparable && isNewerVersion(latestInMajor, currentComparable)) {
+                            const displayLatestInMajor = metadata.originalVersions[latestInMajor] || latestInMajor;
+                            md.appendMarkdown(makeCommand(`Update to ${displayLatestInMajor}`, latestInMajor));
                         }
                     }
                 }
