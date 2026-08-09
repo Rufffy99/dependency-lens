@@ -36,6 +36,8 @@ Updates are applied intelligently, preserving your existing formatting and quote
 2. Wait a moment for the extension to fetch metadata from PyPI.
 3. Hover over dependencies to see details or click "Update".
 
+Use the **Dependency Lens** switch in the status bar, or run **Dependency Lens: Toggle Dependency Lens** from the Command Palette, to disable all parsing, decorations, hover details, and PyPI requests. Pending requests are cancelled, the setting persists across restarts, and it can also be changed with `dependencyLens.enabled`.
+
 ---
 
 ## 💬 Feedback & Feature Requests
@@ -48,6 +50,18 @@ Please open an issue on GitHub:
 ---
 
 ## 📜 Changelog
+
+### 0.1.3
+**Performance and control improvements:**
+
+- Added a persistent status-bar and Command Palette toggle for enabling or disabling Dependency Lens.
+- Disabled mode now clears decorations, skips dependency parsing and hover work, and cancels pending PyPI requests.
+- Added a shared, document-version-aware dependency cache to avoid parsing the same `pyproject.toml` repeatedly.
+- Deduplicated concurrent PyPI requests, limited request concurrency, added timeouts, and normalized package names for more effective caching.
+- Increased successful metadata cache duration and briefly caches failed lookups to avoid repeated network traffic.
+- Prevented stale asynchronous results from updating a changed document or a different active editor.
+- Reduced repeated version-processing work when finding the latest compatible release.
+- Fixed the main `npm test` command so it runs the existing unit test suite successfully.
 
 ### 0.1.2
 **Major improvements to version handling and display:**
@@ -73,4 +87,3 @@ Please open an issue on GitHub:
 
 **Enjoying the extension?**  
 Please leave a review and star us on GitHub! ⭐
-

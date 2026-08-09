@@ -1,19 +1,21 @@
 import * as vscode from 'vscode';
-import { parsePyProject } from '../core/parser';
 import { fetchPackageMetadata } from '../core/pypi';
+import { Dependency } from '../core/types';
 import { extractComparableVersion, getLatestInMajor, isNewerVersion } from '../core/versions';
 
-export function activateHover(context: vscode.ExtensionContext) {
+export function activateHover(
+    context: vscode.ExtensionContext,
+    getDependencies: (document: vscode.TextDocument) => Dependency[],
+    isEnabled: () => boolean,
+) {
     context.subscriptions.push(
         vscode.languages.registerHoverProvider('toml', {
-            provideHover: async (document, position) => {
-                if (!document.fileName.endsWith('pyproject.toml')) {
+            provideHover: async (document, position, token) => {
+                if (!isEnabled() || !document.fileName.endsWith('pyproject.toml')) {
                     return;
                 }
 
-                // Re-parse to find dependency at cursor
-                // Optimization: Could share state with decorator, but parsing is cheap enough here.
-                const deps = parsePyProject(document.getText());
+                const deps = getDependencies(document);
 
                 const dep = deps.find(
                     (d) =>
@@ -27,12 +29,12 @@ export function activateHover(context: vscode.ExtensionContext) {
                 }
 
                 const metadata = await fetchPackageMetadata(dep.name);
-                if (!metadata) {
+                if (!metadata || token.isCancellationRequested || !isEnabled()) {
                     return null;
                 }
 
                 const md = new vscode.MarkdownString();
-                md.isTrusted = true;
+                md.isTrusted = { enabledCommands: ['python-dependency-manager.updateDependency'] };
 
                 md.appendMarkdown(`**${metadata.name}** \n\n`);
                 md.appendMarkdown(`${metadata.summary}\n\n`);

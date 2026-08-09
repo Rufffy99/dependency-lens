@@ -158,20 +158,19 @@ export function getLatestInMajor(allVersions: string[], currentVersion: string):
 
     const currentMajor = semver.major(cleanCurrent);
 
-    // Find all satisfying versions
-    const candidates = allVersions.filter(
-        (v) => semver.major(v) === currentMajor && isNewerVersion(v, cleanCurrent) && !semver.prerelease(v),
-    );
-
-    if (candidates.length === 0) {
-        return null;
+    let latest: string | null = null;
+    for (const version of allVersions) {
+        if (
+            semver.major(version) === currentMajor &&
+            isNewerVersion(version, cleanCurrent) &&
+            !semver.prerelease(version) &&
+            (!latest || isNewerVersion(version, latest))
+        ) {
+            latest = version;
+        }
     }
 
-    // Return the largest; use the build-aware comparator so that build-metadata-only
-    // differences (e.g. 3.0.3+260530 vs 3.0.3+260529) are ordered correctly.
-    candidates.sort((a, b) => (isNewerVersion(a, b) ? -1 : isNewerVersion(b, a) ? 1 : 0));
-
-    return candidates[0];
+    return latest;
 }
 
 export function isValidVersion(allVersions: string[], currentVersion: string): boolean {
