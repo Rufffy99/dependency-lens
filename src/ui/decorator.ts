@@ -1,166 +1,196 @@
 import * as vscode from 'vscode';
-import { parsePyProject } from '../core/parser';
-import { fetchPackageMetadata } from '../core/pypi';
-import { compareVersions, extractComparableVersion, getLatestInMajor, isValidVersion } from '../core/versions';
 import * as semver from 'semver';
+import { fetchPackageMetadata } from '../core/pypi';
+import { Dependency, PackageMetadata } from '../core/types';
+import { compareVersions, extractComparableVersion, getLatestInMajor, isValidVersion } from '../core/versions';
 
-let decorationType: vscode.TextEditorDecorationType;
+const UPDATE_DELAY_MS = 750;
 
-export function activateDecorations(context: vscode.ExtensionContext) {
-    decorationType = vscode.window.createTextEditorDecorationType({
+export interface DecorationController extends vscode.Disposable {
+    setEnabled(enabled: boolean): void;
+    refresh(): void;
+}
+
+function isPyProject(document: vscode.TextDocument): boolean {
+    return document.fileName.endsWith('pyproject.toml');
+}
+
+function createDecoration(dep: Dependency, metadata: PackageMetadata): vscode.DecorationOptions | null {
+    const status = compareVersions(dep.version, metadata.latestStable);
+
+    if (status.type === 'latest') {
+        return null;
+    }
+
+    if (!isValidVersion(metadata.allVersions, dep.version)) {
+        return {
+            range: new vscode.Range(dep.line, Number.MAX_SAFE_INTEGER, dep.line, Number.MAX_SAFE_INTEGER),
+            renderOptions: {
+                after: {
+                    contentText: ' \u26A0 Version not found',
+                    color: '#e6a23c',
+                    margin: '0 0 0 2em',
+                },
+            },
+        };
+    }
+
+    const colors: Record<Exclude<typeof status.type, 'latest'>, string> = {
+        major: '#ff4d4f',
+        minor: '#faad14',
+        patch: '#52c41a',
+        prerelease: '#eb2f96',
+    };
+    let contentText = ` \u2192 ${metadata.originalVersions[status.latest] || status.latest}`;
+
+    if (status.type === 'major') {
+        const latestInMajor = getLatestInMajor(metadata.allVersions, dep.version);
+        if (latestInMajor) {
+            const cleanCurrent = extractComparableVersion(dep.version);
+            const diffType = cleanCurrent ? semver.diff(cleanCurrent, latestInMajor) : null;
+            let label = 'Latest in major';
+            if (diffType === 'patch' || diffType === 'prepatch') {
+                label = 'Latest Patch';
+            } else if (diffType === 'minor' || diffType === 'preminor') {
+                label = 'Latest Minor';
+            }
+
+            const displayLatestInMajor = metadata.originalVersions[latestInMajor] || latestInMajor;
+            contentText += ` (${label}: ${displayLatestInMajor})`;
+        }
+    }
+
+    return {
+        range: new vscode.Range(dep.line, Number.MAX_SAFE_INTEGER, dep.line, Number.MAX_SAFE_INTEGER),
+        renderOptions: {
+            after: {
+                contentText,
+                color: colors[status.type],
+                margin: '0 0 0 2em',
+            },
+        },
+    };
+}
+
+export function activateDecorations(
+    getDependencies: (document: vscode.TextDocument) => Dependency[],
+    initiallyEnabled: boolean,
+): DecorationController {
+    const decorationType = vscode.window.createTextEditorDecorationType({
         after: {
             margin: '0 0 0 10px',
             fontStyle: 'italic',
         },
     });
-
+    const subscriptions: vscode.Disposable[] = [];
     let activeEditor = vscode.window.activeTextEditor;
-    let timeout: NodeJS.Timeout | undefined = undefined;
+    let enabled = initiallyEnabled;
+    let timeout: NodeJS.Timeout | undefined;
+    let generation = 0;
 
-    function updateDecorations() {
-        if (!activeEditor || activeEditor.document.fileName.endsWith('package.json')) {
-            return;
+    function clearDecorations(): void {
+        for (const editor of vscode.window.visibleTextEditors) {
+            editor.setDecorations(decorationType, []);
         }
-        // Only trigger for pyproject.toml
-        if (!activeEditor.document.fileName.endsWith('pyproject.toml')) {
-            return;
-        }
-
-        const text = activeEditor.document.getText();
-        const dependencies = parsePyProject(text);
-
-        // We need to fetch versions for all deps.
-        // This is async. We can't await in the main loop easily for all of them linearly.
-        // We will fire off requests and re-update when they come back?
-        // Or better: parallel fetch and update all at once.
-
-        // Loading state?
-        // For MVP, we'll just try to fetch all, and apply decorations when ready.
-        // To avoid flickering, we might apply cached ones immediately?
-        // Let's do a simple Promise.all for MVP.
-
-        Promise.all(
-            dependencies.map(async (dep) => {
-                const metadata = await fetchPackageMetadata(dep.name);
-                if (!metadata) {
-                    return null;
-                }
-
-                const status = compareVersions(dep.version, metadata.latestStable);
-
-                if (status.type === 'latest') {
-                    return null;
-                } // No decoration if up to date
-
-                // Validation: Check if version exists
-                if (!isValidVersion(metadata.allVersions || [], dep.version)) {
-                    return {
-                        range: new vscode.Range(dep.line, Number.MAX_SAFE_INTEGER, dep.line, Number.MAX_SAFE_INTEGER),
-                        renderOptions: {
-                            after: {
-                                contentText: ` \u26A0 Version not found`,
-                                color: '#e6a23c', // Warning Orange
-                                margin: '0 0 0 2em',
-                            },
-                        },
-                    };
-                }
-
-                // Color logic
-                let color = 'rgba(100, 100, 100, 0.7)'; // Default grey
-                if (status.type === 'major') {
-                    color = '#ff4d4f';
-                } // Red
-                if (status.type === 'minor') {
-                    color = '#faad14';
-                } // Yellow
-                if (status.type === 'patch') {
-                    color = '#52c41a';
-                } // Green
-                if (status.type === 'prerelease') {
-                    color = '#eb2f96';
-                } // Pink
-
-                // Message
-                let contentText = ` \u2192 ${status.latest}`; // right arrow
-
-                // Check for major update alternative
-                if (status.type === 'major' && metadata.allVersions) {
-                    const latestInMajor = getLatestInMajor(metadata.allVersions, dep.version);
-
-                    if (latestInMajor) {
-                        const cleanCurrent = extractComparableVersion(dep.version);
-                        const diffType = cleanCurrent ? semver.diff(cleanCurrent, latestInMajor) : null;
-
-                        let label = 'Latest in major';
-                        if (diffType === 'patch' || diffType === 'prepatch') {
-                            label = 'Latest Patch';
-                        } else if (diffType === 'minor' || diffType === 'preminor') {
-                            label = 'Latest Minor';
-                        }
-
-                        // Display original PyPI version strings
-                        const displayLatest = metadata.originalVersions[status.latest] || status.latest;
-                        const displayLatestInMajor = metadata.originalVersions[latestInMajor] || latestInMajor;
-                        contentText = ` \u2192 ${displayLatest} (${label}: ${displayLatestInMajor})`;
-                    }
-                }
-
-                return {
-                    range: new vscode.Range(dep.line, Number.MAX_SAFE_INTEGER, dep.line, Number.MAX_SAFE_INTEGER), // End of line
-                    renderOptions: {
-                        after: {
-                            contentText: contentText,
-                            color: color,
-                            margin: '0 0 0 2em',
-                        },
-                    },
-                } as vscode.DecorationOptions;
-            }),
-        ).then((results) => {
-            if (activeEditor) {
-                activeEditor.setDecorations(
-                    decorationType,
-                    results.filter((r): r is vscode.DecorationOptions => r !== null),
-                );
-            }
-        });
     }
 
-    function triggerUpdateDecorations(throttle = false) {
+    async function updateDecorations(updateGeneration: number): Promise<void> {
+        const editor = activeEditor;
+        if (!enabled || !editor || !isPyProject(editor.document)) {
+            return;
+        }
+
+        const documentVersion = editor.document.version;
+        const dependencies = getDependencies(editor.document);
+        const packageNames = [...new Set(dependencies.map((dependency) => dependency.name))];
+        const metadataEntries = await Promise.all(
+            packageNames.map(async (name) => [name, await fetchPackageMetadata(name)] as const),
+        );
+
+        if (
+            !enabled ||
+            generation !== updateGeneration ||
+            activeEditor !== editor ||
+            editor.document.version !== documentVersion
+        ) {
+            return;
+        }
+
+        const metadataByName = new Map(metadataEntries);
+        const decorations = dependencies
+            .map((dependency) => {
+                const metadata = metadataByName.get(dependency.name);
+                return metadata ? createDecoration(dependency, metadata) : null;
+            })
+            .filter((decoration): decoration is vscode.DecorationOptions => decoration !== null);
+
+        editor.setDecorations(decorationType, decorations);
+    }
+
+    function scheduleUpdate(delay = false): void {
+        generation++;
+        const updateGeneration = generation;
         if (timeout) {
             clearTimeout(timeout);
             timeout = undefined;
         }
-        if (throttle) {
-            timeout = setTimeout(updateDecorations, 500);
+
+        if (!enabled) {
+            return;
+        }
+
+        if (delay) {
+            timeout = setTimeout(() => {
+                timeout = undefined;
+                void updateDecorations(updateGeneration);
+            }, UPDATE_DELAY_MS);
         } else {
-            updateDecorations();
+            void updateDecorations(updateGeneration);
         }
     }
 
-    if (activeEditor) {
-        triggerUpdateDecorations();
-    }
-
-    vscode.window.onDidChangeActiveTextEditor(
-        (editor) => {
+    subscriptions.push(
+        vscode.window.onDidChangeActiveTextEditor((editor) => {
             activeEditor = editor;
-            if (editor) {
-                triggerUpdateDecorations();
+            scheduleUpdate();
+        }),
+        vscode.workspace.onDidChangeTextDocument((event) => {
+            if (enabled && activeEditor && event.document === activeEditor.document && isPyProject(event.document)) {
+                scheduleUpdate(true);
             }
-        },
-        null,
-        context.subscriptions,
+        }),
     );
 
-    vscode.workspace.onDidChangeTextDocument(
-        (event) => {
-            if (activeEditor && event.document === activeEditor.document) {
-                triggerUpdateDecorations(true);
+    scheduleUpdate();
+
+    return {
+        setEnabled(nextEnabled: boolean): void {
+            if (enabled === nextEnabled) {
+                return;
+            }
+            enabled = nextEnabled;
+            generation++;
+            if (timeout) {
+                clearTimeout(timeout);
+                timeout = undefined;
+            }
+            clearDecorations();
+            if (enabled) {
+                scheduleUpdate();
             }
         },
-        null,
-        context.subscriptions,
-    );
+        refresh(): void {
+            clearDecorations();
+            scheduleUpdate();
+        },
+        dispose(): void {
+            generation++;
+            if (timeout) {
+                clearTimeout(timeout);
+            }
+            clearDecorations();
+            subscriptions.forEach((subscription) => subscription.dispose());
+            decorationType.dispose();
+        },
+    };
 }

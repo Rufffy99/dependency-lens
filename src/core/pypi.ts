@@ -3,12 +3,42 @@ import { PackageMetadata } from './types';
 import * as semver from 'semver';
 
 interface CacheEntry {
-    data: PackageMetadata;
+    data: PackageMetadata | null;
     timestamp: number;
 }
 
 const cache = new Map<string, CacheEntry>();
-const CACHE_TTL = 10 * 60 * 1000; // 10 minutes
+const inFlightRequests = new Map<string, Promise<PackageMetadata | null>>();
+const requestControllers = new Set<AbortController>();
+const requestQueue: Array<() => void> = [];
+const CACHE_TTL = 30 * 60 * 1000;
+const FAILED_CACHE_TTL = 60 * 1000;
+const REQUEST_TIMEOUT_MS = 10_000;
+const MAX_CONCURRENT_REQUESTS = 6;
+let activeRequests = 0;
+let requestGeneration = 0;
+
+function normalizePackageName(packageName: string): string {
+    // PEP 503 package names are case-insensitive and collapse runs of '-', '_' and '.'.
+    return packageName
+        .trim()
+        .toLowerCase()
+        .replace(/[-_.]+/g, '-');
+}
+
+async function withRequestSlot<T>(operation: () => Promise<T>): Promise<T> {
+    if (activeRequests >= MAX_CONCURRENT_REQUESTS) {
+        await new Promise<void>((resolve) => requestQueue.push(resolve));
+    }
+
+    activeRequests++;
+    try {
+        return await operation();
+    } finally {
+        activeRequests--;
+        requestQueue.shift()?.();
+    }
+}
 
 export function normalizePyPIVersion(version: string): string | null {
     const normalized = version.trim();
@@ -171,26 +201,70 @@ export function buildPackageMetadataFromPyPI(data: PyPIJson): PackageMetadata {
 }
 
 export async function fetchPackageMetadata(packageName: string): Promise<PackageMetadata | null> {
+    const normalizedName = normalizePackageName(packageName);
     const now = Date.now();
-    const cached = cache.get(packageName);
-    if (cached && now - cached.timestamp < CACHE_TTL) {
+    const cached = cache.get(normalizedName);
+    const cacheTtl = cached?.data ? CACHE_TTL : FAILED_CACHE_TTL;
+    if (cached && now - cached.timestamp < cacheTtl) {
         return cached.data;
     }
 
-    try {
-        const response = await fetch(`https://pypi.org/pypi/${packageName}/json`);
-        if (!response.ok) {
-            console.warn(`Failed to fetch metadata for ${packageName}: ${response.statusText}`);
+    const existingRequest = inFlightRequests.get(normalizedName);
+    if (existingRequest) {
+        return existingRequest;
+    }
+
+    const generation = requestGeneration;
+    const request = withRequestSlot(async () => {
+        if (generation !== requestGeneration) {
             return null;
         }
 
-        const data = (await response.json()) as PyPIJson;
-        const metadata = buildPackageMetadataFromPyPI(data);
+        const controller = new AbortController();
+        requestControllers.add(controller);
+        const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
-        cache.set(packageName, { data: metadata, timestamp: now });
-        return metadata;
-    } catch (e) {
-        console.error(`Error fetching package ${packageName}:`, e);
-        return null;
+        try {
+            const response = await fetch(`https://pypi.org/pypi/${encodeURIComponent(normalizedName)}/json`, {
+                signal: controller.signal,
+            });
+            if (!response.ok) {
+                console.warn(`Failed to fetch metadata for ${normalizedName}: ${response.statusText}`);
+                cache.set(normalizedName, { data: null, timestamp: Date.now() });
+                return null;
+            }
+
+            const data = (await response.json()) as PyPIJson;
+            const metadata = buildPackageMetadataFromPyPI(data);
+
+            cache.set(normalizedName, { data: metadata, timestamp: Date.now() });
+            return metadata;
+        } catch (error) {
+            if (controller.signal.aborted) {
+                return null;
+            }
+            console.error(`Error fetching package ${normalizedName}:`, error);
+            cache.set(normalizedName, { data: null, timestamp: Date.now() });
+            return null;
+        } finally {
+            clearTimeout(timeout);
+            requestControllers.delete(controller);
+        }
+    });
+
+    inFlightRequests.set(normalizedName, request);
+    try {
+        return await request;
+    } finally {
+        if (inFlightRequests.get(normalizedName) === request) {
+            inFlightRequests.delete(normalizedName);
+        }
     }
+}
+
+/** Stops active requests and prevents queued requests from starting. */
+export function cancelPendingPackageRequests(): void {
+    requestGeneration++;
+    requestControllers.forEach((controller) => controller.abort());
+    inFlightRequests.clear();
 }
